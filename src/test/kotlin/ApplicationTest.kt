@@ -1,5 +1,3 @@
-package com.example
-
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -7,62 +5,86 @@ import io.ktor.server.testing.*
 import kotlin.test.*
 
 class ApplicationTest {
-    @Test
-    fun testGetAllProducts() = testApplication {
-        application {
-            configureApplication()
-        }
 
-        val response = client.get("/products")
-        assertEquals(HttpStatusCode.OK, response.status)
-        println("✅ GET /products - Status: ${response.status}")
+    @Test
+    fun testRoot() = testApplication {
+        application { module() }
+        client.get("/").apply {
+            assertEquals(HttpStatusCode.OK, status)
+            assertTrue(bodyAsText().contains("Task API"))
+        }
     }
 
     @Test
-    fun testGetProductById() = testApplication {
-        application {
-            configureApplication()
+    fun testDocs() = testApplication {
+        application { module() }
+        client.get("/docs").apply {
+            assertEquals(HttpStatusCode.OK, status)
+            assertTrue(bodyAsText().contains("ENDPOINTS"))
         }
-
-        val response = client.get("/products/1")
-        assertEquals(HttpStatusCode.OK, response.status)
-        println("✅ GET /products/1 - Status: ${response.status}")
     }
 
     @Test
-    fun testGetProductByIdNotFound() = testApplication {
-        application {
-            configureApplication()
+    fun testGetAllTasks() = testApplication {
+        application { module() }
+        client.get("/tasks").apply {
+            assertEquals(HttpStatusCode.OK, status)
+            assertTrue(bodyAsText().contains("Learn Ktor"))
         }
-
-        val response = client.get("/products/999")
-        assertEquals(HttpStatusCode.NotFound, response.status)
-        println("✅ GET /products/999 - Status: ${response.status}")
     }
 
     @Test
-    fun testCreateProduct() = testApplication {
-        application {
-            configureApplication()
+    fun testGetTaskById() = testApplication {
+        application { module() }
+        client.get("/tasks/1").apply {
+            assertEquals(HttpStatusCode.OK, status)
+            assertTrue(bodyAsText().contains("Learn Ktor"))
         }
+    }
 
-        val response = client.post("/products") {
+    @Test
+    fun testGetTaskNotFound() = testApplication {
+        application { module() }
+        client.get("/tasks/999").apply {
+            assertEquals(HttpStatusCode.NotFound, status)
+        }
+    }
+
+    @Test
+    fun testCreateTask() = testApplication {
+        application { module() }
+        val response = client.post("/tasks") {
             contentType(ContentType.Application.Json)
-            setBody("""{"productName":"Test Product"}""")
+            setBody("""{"title": "New Task"}""")
         }
-
         assertEquals(HttpStatusCode.Created, response.status)
-        println("✅ POST /products - Status: ${response.status}")
+        assertTrue(response.bodyAsText().contains("New Task"))
     }
 
     @Test
-    fun testDeleteProduct() = testApplication {
-        application {
-            configureApplication()
+    fun testDeleteTask() = testApplication {
+        application { module() }
+        client.delete("/tasks/2").apply {
+            assertEquals(HttpStatusCode.OK, status)
+            assertTrue(bodyAsText().contains("Build API"))
         }
+    }
 
-        val response = client.delete("/products/1")
-        assertTrue(response.status == HttpStatusCode.OK || response.status == HttpStatusCode.NotFound)
-        println("✅ DELETE /products/1 - Status: ${response.status}")
+    @Test
+    fun testToggleTask() = testApplication {
+        application { module() }
+        client.patch("/tasks/3/toggle").apply {
+            assertEquals(HttpStatusCode.OK, status)
+            assertTrue(bodyAsText().contains("Write tests"))
+        }
+    }
+
+    @Test
+    fun testFilterTasks() = testApplication {
+        application { module() }
+        client.get("/tasks?filter=completed").apply {
+            assertEquals(HttpStatusCode.OK, status)
+            assertTrue(bodyAsText().contains("Learn Ktor"))
+        }
     }
 }
