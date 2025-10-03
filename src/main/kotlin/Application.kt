@@ -1,139 +1,160 @@
-package com.example
-
+import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
-import io.ktor.server.application.*
+import io.ktor.server.plugins.*
 import io.ktor.server.plugins.contentnegotiation.*
-import io.ktor.serialization.kotlinx.json.*
-import io.ktor.server.response.*
+import io.ktor.server.plugins.statuspages.*
+import io.ktor.server.plugins.callloging.*
 import io.ktor.server.request.*
+import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.Serializable
 import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
+import kotlinx.serialization.Serializable
+import org.slf4j.event.Level
 
+// Модели данных
+@Serializable
+data class Task(val id: Int, val title: String, val completed: Boolean = false)
 
 @Serializable
-data class Product(val productId: Int, val productName: String)
+data class CreateTaskRequest(val title: String)
 
 @Serializable
-data class CreateProductRequest(val productName: String)
+data class ApiResponse(
+    val success: Boolean,
+    val message: String,
+    val data: List<Task>? = null
+)
 
+// Хранилище в памяти
+val taskStorage = mutableListOf(
+    Task(1, "Learn Ktor", true),
+    Task(2, "Build API", false),
+    Task(3, "Write tests", false)
+)
 
-class ProductInventory {
-    private val productCollection = mutableListOf(
-        Product(1, "First product"),
-        Product(2, "Second product")
-    )
-
-    fun getAllProducts(): List<Product> = productCollection.toList()
-
-    fun getProductById(productId: Int): Product? =
-        productCollection.find { it.productId == productId }
-
-    fun addNewProduct(productName: String): Product {
-        val newProductId = (productCollection.maxOfOrNull { it.productId } ?: 0) + 1
-        val newProduct = Product(newProductId, productName)
-        productCollection.add(newProduct)
-        return newProduct
-    }
-
-    fun removeProduct(productId: Int): Boolean =
-        productCollection.removeIf { it.productId == productId }
+fun main() {
+    embeddedServer(Netty, port = 8080, host = "0.0.0.0", module = Application::module).start(wait = true)
 }
 
-
-class ProductHandler(private val inventory: ProductInventory) {
-    suspend fun handleGetAllProducts(call: ApplicationCall) {
-        call.respond(inventory.getAllProducts())
+fun Application.module() {
+    // Логирование
+    install(CallLogging) {
+        level = Level.INFO
     }
 
-    suspend fun handleGetProductById(call: ApplicationCall) {
-        val productId = call.parameters["productId"]?.toIntOrNull()
-
-        if (productId == null) {
-            call.respond(HttpStatusCode.BadRequest, "Invalid product ID")
-            return
-        }
-
-        val product = inventory.getProductById(productId)
-        if (product == null) {
-            call.respond(HttpStatusCode.NotFound, "Product not found")
-        } else {
-            call.respond(product)
-        }
-    }
-
-    suspend fun handleCreateProduct(call: ApplicationCall) {
-        try {
-            val request = call.receive<CreateProductRequest>()
-
-            if (request.productName.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, "Product name cannot be empty")
-                return
-            }
-
-            val newProduct = inventory.addNewProduct(request.productName)
-            call.respond(HttpStatusCode.Created, newProduct)
-
-        } catch (e: Exception) {
-            call.respond(HttpStatusCode.BadRequest, "Invalid request format")
-        }
-    }
-
-    suspend fun handleDeleteProduct(call: ApplicationCall) {
-        val productId = call.parameters["productId"]?.toIntOrNull()
-
-        if (productId == null) {
-            call.respond(HttpStatusCode.BadRequest, "Invalid product ID")
-            return
-        }
-
-        val removed = inventory.removeProduct(productId)
-        if (removed) {
-            call.respond(HttpStatusCode.OK, "Product deleted successfully")
-        } else {
-            call.respond(HttpStatusCode.NotFound, "Product not found")
-        }
-    }
-}
-
-
-fun Application.configureProductRoutes() {
-    val inventory = ProductInventory()
-    val handler = ProductHandler(inventory)
-
-    routing {
-        route("/products") {
-            get {
-                handler.handleGetAllProducts(call)
-            }
-
-            get("/{productId}") {
-                handler.handleGetProductById(call)
-            }
-
-            post {
-                handler.handleCreateProduct(call)
-            }
-
-            delete("/{productId}") {
-                handler.handleDeleteProduct(call)
-            }
-        }
-    }
-}
-
-
-fun Application.configureApplication() {
+    // JSON
     install(ContentNegotiation) {
         json()
     }
-    configureProductRoutes()
-}
 
+    // Обработка ошибок
+    install(StatusPages) {
+        exception<Throwable> { call, cause ->
+            call.respond(HttpStatusCode.InternalServerError,
+                ApiResponse(false, "Error: ${cause.message}"))
+        }
+        exception<NotFoundException> { call, _ ->
+            call.respond(HttpStatusCode.NotFound,
+                ApiResponse(false, "Task not found"))
+        }
+        exception<BadRequestException> { call, cause ->
+            call.respond(HttpStatusCode.BadRequest,
+                ApiResponse(false, "Bad request: ${cause.message}"))
+        }
+    }
 
-fun main() {
-    embeddedServer(Netty, port = 8080, host = "0.0.0.0") {
-        configureApplication()
-    }.start(wait = true)
+    // Роуты
+    routing {
+        get("/") {
+            call.respondText("Task API - Visit /docs for documentation")
+        }
+
+        // Документация API
+        get("/docs") {
+            val docs = """
+                TASK API DOCUMENTATION
+                
+                ENDPOINTS:
+                GET    /tasks                 - Get all tasks
+                GET    /tasks?filter=completed - Get completed tasks  
+                GET    /tasks?filter=active    - Get active tasks
+                GET    /tasks/{id}            - Get task by ID
+                POST   /tasks                 - Create new task
+                DELETE /tasks/{id}            - Delete task
+                PATCH  /tasks/{id}/toggle     - Toggle task status
+                
+                EXAMPLES:
+                Create task: POST /tasks with JSON: {"title": "Task name"}
+                Get task: GET /tasks/1
+                Delete task: DELETE /tasks/1
+            """.trimIndent()
+            call.respondText(docs)
+        }
+
+        // GET /tasks - получить все задачи
+        get("/tasks") {
+            val filter = call.request.queryParameters["filter"]
+            val tasks = when (filter) {
+                "completed" -> taskStorage.filter { it.completed }
+                "active" -> taskStorage.filter { !it.completed }
+                else -> taskStorage
+            }
+            call.respond(ApiResponse(true, "Tasks retrieved successfully", tasks))
+        }
+
+        // GET /tasks/{id} - получить задачу по ID
+        get("/tasks/{id}") {
+            val id = call.parameters["id"]?.toIntOrNull()
+                ?: throw BadRequestException("Invalid ID")
+
+            val task = taskStorage.find { it.id == id }
+                ?: throw NotFoundException()
+
+            call.respond(ApiResponse(true, "Task found", listOf(task)))
+        }
+
+        // POST /tasks - создать новую задачу
+        post("/tasks") {
+            val request = call.receive<CreateTaskRequest>()
+
+            if (request.title.isBlank()) {
+                throw BadRequestException("Title cannot be empty")
+            }
+
+            val newId = (taskStorage.maxOfOrNull { it.id } ?: 0) + 1
+            val newTask = Task(newId, request.title)
+
+            taskStorage.add(newTask)
+            call.respond(HttpStatusCode.Created,
+                ApiResponse(true, "Task created successfully", listOf(newTask)))
+        }
+
+        // DELETE /tasks/{id}
+        delete("/tasks/{id}") {
+            val id = call.parameters["id"]?.toIntOrNull()
+                ?: throw BadRequestException("Invalid ID")
+
+            val task = taskStorage.find { it.id == id }
+                ?: throw NotFoundException()
+
+            taskStorage.remove(task)
+            call.respond(ApiResponse(true, "Task deleted successfully", listOf(task)))
+        }
+
+        // PATCH /tasks/{id}/toggle
+        patch("/tasks/{id}/toggle") {
+            val id = call.parameters["id"]?.toIntOrNull()
+                ?: throw BadRequestException("Invalid ID")
+
+            val task = taskStorage.find { it.id == id }
+                ?: throw NotFoundException()
+
+            val updatedTask = task.copy(completed = !task.completed)
+            taskStorage[taskStorage.indexOf(task)] = updatedTask
+
+            call.respond(ApiResponse(true, "Task status updated", listOf(updatedTask)))
+        }
+    }
 }
